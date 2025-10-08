@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Certificate Finder</title>
+
+<style>
+  :root{
+    --bg:#fbfcfd;
+    --card:#ffffff;
+    --muted:#65737e;
+    --accent:#0b84ff;
+    --border:#e6eef9;
+    --row:#f8fbff;
+    --danger:#e04b4b;
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    color-scheme: light;
+  }
+
+  html,body{height:100%;margin:0;background:var(--bg);color:#0b1a2b;}
+  .wrap{
+    max-width:980px;margin:28px auto;padding:18px;
+  }
+
+  header{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+  h1{font-size:20px;margin:0;font-weight:600;}
+  p.lead{margin:4px 0 0;color:var(--muted);font-size:13px;}
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:14px;
+    box-shadow:0 6px 18px rgba(11,132,255,0.03);
+  }
+
+  form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;}
+  input[type="text"]{
+    flex:1;min-width:220px;padding:10px 12px;border:1px solid #d7e8ff;
+    border-radius:8px;font-size:14px;outline:none;background:#fff;
+  }
+  input[type="text"]:focus{box-shadow:0 0 0 4px rgba(11,132,255,0.06);border-color:var(--accent);}
+
+  button{
+    padding:10px 14px;border-radius:8px;border:0;background:var(--accent);
+    color:#fff;font-weight:600;font-size:14px;cursor:pointer;
+  }
+  button[disabled]{opacity:.6;cursor:default;}
+
+  .meta{font-size:13px;color:var(--muted);margin-bottom:8px;}
+
+  /* Table */
+  .table-wrap{overflow:auto;border-radius:8px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  thead th{
+    text-align:left;padding:10px 12px;background:linear-gradient(180deg,#fbfdff, #f4f8ff);
+    border-bottom:1px solid var(--border);font-weight:600;color:#1d2b3a;
+  }
+  tbody tr{background:transparent;}
+  tbody tr:nth-child(odd){background:var(--row);}
+  td{padding:10px 12px;border-bottom:1px dashed rgba(11,132,255,0.03);vertical-align:top;}
+  td.id{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; font-size:12px; color:#123;}
+  .small{font-size:12px;color:var(--muted);}
+
+  .empty{padding:18px;text-align:center;color:var(--muted);}
+
+  /* tiny spinner */
+  .spinner{
+    width:16px;height:16px;border-radius:50%;border:2px solid rgba(0,0,0,0.06);
+    border-top-color:var(--accent);animation:spin .9s linear infinite;display:inline-block;margin-left:8px;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* responsive */
+  @media (max-width:640px){
+    h1{font-size:18px}
+    thead th:nth-child(4), td:nth-child(4),
+    thead th:nth-child(5), td:nth-child(5) { display:none; } /* hide issuer + valid-from on small screens */
+  }
+
+  /* subtle error */
+  .err{color:var(--danger);font-weight:600}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Certificate Finder</h1>
+      <p class="lead">Enter a domain or subdomain (e.g. <code>securityastra.com</code>)</p>
+    </header>
+
+    <div class="card">
+      <form id="searchForm" onsubmit="return false;">
+        <input id="domainInput" type="text" placeholder="example.com or sub.example.com" aria-label="domain" />
+        <button id="goBtn" type="button" onclick="fetchCertificates()">Search</button>
+        <div style="flex-basis:100%;"></div>
+        <!-- <div class="meta">Source: crt.sh — live certificate transparency logs</div> -->
+      </form>
+
+      <div id="resultArea">
+        <div class="empty">Enter a domain and click <strong>Search</strong></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+async function fetchCertificates(){
+  const input = document.getElementById('domainInput');
+  const q = (input.value || '').trim();
+  const resultArea = document.getElementById('resultArea');
+  const btn = document.getElementById('goBtn');
+
+  if(!q){ alert('Please enter a domain or subdomain.'); input.focus(); return; }
+
+  // UI: loading
+  btn.disabled = true;
+  btn.textContent = 'Searching';
+  const spinner = document.createElement('span'); spinner.className = 'spinner'; btn.appendChild(spinner);
+  resultArea.innerHTML = '';
+
+  const url = `https://crt.sh/?q=${encodeURIComponent(q)}&output=json`;
+
+  try {
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('Failed to fetch (crt.sh).');
+
+    // crt.sh sometimes returns non-json on large results; guard it
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch(e) {
+      // if parsing fails, treat as no results
+      data = [];
+    }
+
+    // collect unique names and map to latest cert info
+    const seen = new Set();
+    const certs = [];
+    for(const entry of data){
+      const nv = (entry.name_value || '').split('\\n').join('\\n').split('\\n'); // handle newline
+      for(const raw of nv){
+        const name = raw.trim();
+        if(!name) continue;
+        if(!seen.has(name)){
+          seen.add(name);
+          certs.push({
+            id: entry.id || '',
+            domain: name,
+            common_name: entry.common_name || '',
+            issuer: entry.issuer_name || '',
+            valid_from: entry.not_before || '',
+            valid_to: entry.not_after || ''
+          });
+        }
+      }
+    }
+
+    if(certs.length === 0){
+      resultArea.innerHTML = `<div class="empty">No certificates found for <strong>${escapeHtml(q)}</strong>.</div>`;
+      return;
+    }
+
+    // Build table
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    let html = '<table><thead><tr>'
+      +'<th>ID</th><th>Domain</th><th>Common Name</th><th>Issuer</th><th>Valid From</th><th>Valid To</th>'
+      +'</tr></thead><tbody>';
+    for(const c of certs){
+      html += `<tr>
+        <td class="id">${escapeHtml(c.id)}</td>
+        <td>${escapeHtml(c.domain)}</td>
+        <td class="small">${escapeHtml(c.common_name)}</td>
+        <td class="small">${escapeHtml(c.issuer)}</td>
+        <td class="small">${escapeHtml(c.valid_from)}</td>
+        <td class="small">${escapeHtml(c.valid_to)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+    resultArea.appendChild(wrap);
+
+  } catch(err){
+    resultArea.innerHTML = `<div class="empty err">Error: ${escapeHtml(String(err))}</div>`;
+  } finally {
+    // restore button
+    btn.disabled = false;
+    btn.textContent = 'Search';
+  }
+}
+
+// small helper to escape HTML
+function escapeHtml(s){
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
+}
+
+// optional: submit on Enter
+document.getElementById('domainInput').addEventListener('keydown', function(e){
+  if(e.key === 'Enter'){ fetchCertificates(); e.preventDefault(); }
+});
+</script>
+</body>
+</html>
